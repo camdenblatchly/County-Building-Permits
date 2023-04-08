@@ -1,0 +1,156 @@
+---
+title: "Scrape Annual County Data"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+here::i_am("R/scrape_cty_dta.Rmd")
+
+library(tidyverse)
+library(data.table)
+library(janitor)
+
+library(tidycensus)
+data(fips_codes)
+
+```
+
+
+```{r, message = FALSE}
+
+permits <- tibble::tribble()
+
+# Combine privately owned housing unit permits 
+# for the years from 2000 to 2019
+for (year in 2000:2019) {
+  
+  src_url <- paste0("https://www2.census.gov/econ/bps/County/co", year, "a.txt")
+  
+  dta <- readr::read_delim(
+      src_url,
+      delim = ",",
+      skip = 1,
+    ) %>%
+    clean_names()
+  
+  dta_clean <- dta %>%
+    select(state, county, name, units_8, units_11, units_14, units_17) %>%
+    rename(
+      geoid_st = state,
+      geoid_co = county,
+      name_co = name,
+      units_single_family = units_8
+    ) %>%
+    mutate(
+      units_multi_family = units_11 + units_14 + units_17,
+      units_total = units_multi_family + units_single_family,
+      geoid_st = stringr::str_pad(stringr::str_trim(geoid_st), 2, side = "left", pad = "0"),
+      geoid_co = stringr::str_pad(stringr::str_trim(geoid_co), 3, side = "left", pad = "0"),
+      name_co = stringr::str_trim(name_co),
+      geoid = paste0(geoid_st, geoid_co),
+      year = year
+    ) %>%
+    select(geoid, units_single_family, units_multi_family, units_total, year)
+  
+  # Standardize to double
+  dta_clean$units_total <- as.numeric(dta_clean$units_total)
+  dta_clean$units_multi_family <- as.numeric(dta_clean$units_multi_family)
+  dta_clean$units_single_family <- as.numeric(dta_clean$units_single_family)
+
+  if (nrow(permits) == 0) {
+    permits <- dta_clean
+  }
+  else {
+    permits <- bind_rows(permits, dta_clean)
+  }
+  
+}
+
+readr::write_csv(permits, here::here("data/building_permits_cty_2000_2019.csv"))
+
+```
+
+
+```{r}
+
+# Pull County population estimates from 2010 to 2019
+# using tidycensus
+pop_2010_2019 <- tidycensus::get_estimates(
+    geography = "county",
+    time_series = TRUE,
+    year = 2019,
+    variable = "POP"
+  ) %>%
+  # Remove redundant 2010 values
+  filter(DATE >= 3) %>%
+  # Convert to correct year format
+  mutate(year = 2007 + DATE) %>%
+  rename(
+    geoid = GEOID,
+    pop = value,
+    name_co = NAME
+  ) %>%
+  select(geoid, year, pop)
+
+```
+
+```{r}
+
+# Format 2000 to 2009 dataset to complement dataset from 2010-2019
+pop_2000_2009 <- readr::read_csv(
+    here::here("data/co_pop_2000_2010.csv")
+  ) %>%
+  # Filter out state level summaries
+  filter(SUMLEV == 50) %>%
+  mutate(
+    geoid_st = stringr::str_pad(STATE, 2, side = "left", pad = "0"),
+    geoid_co = stringr::str_pad(COUNTY, 3, side = "left", pad = "0"),
+    geoid = paste0(geoid_st, geoid_co)
+  ) %>%
+  select(geoid, tidyr::starts_with("POPESTIMATE")) %>%
+  pivot_longer(!geoid) %>%
+  mutate(
+    year = stringr::str_sub(name, -4),
+    pop = value
+  ) %>%
+  select(geoid, year, pop) %>%
+  # Remove 2010 from dataset since we have values already in our 2010-2019 dataset
+  filter(year < 2010)
+
+pop_2000_2009$year <- as.numeric(pop_2000_2009$year)
+
+```
+
+```{r}
+
+pop_2000_2019 <- bind_rows(pop_2000_2009, pop_2010_2019)
+
+# Combine with tidycensus fips_codes dataset for more readable county names
+fips_clean <- fips_codes %>%
+  mutate(
+    geoid = paste0(state_code, county_code),
+    name_co = paste0(county, ", ", state)
+  ) %>%
+  select(geoid, name_co)
+
+pop_permits_2000_2019 <- dplyr::left_join(
+    permits,
+    pop_2000_2019,
+    by = c("geoid", "year")
+  ) %>%
+  mutate(
+    units_total_per_1000 = (units_total / pop) * 1000,
+    units_single_family_per_1000 = (units_single_family / pop) * 1000,
+    units_multi_family_per_1000 = (units_multi_family / pop) * 1000
+  ) %>% 
+  left_join(
+    .,
+    fips_clean, 
+    by = "geoid"
+  )
+
+readr::write_csv(permits, here::here("data/permits_per_capita_2000_2019.csv"))
+
+```
+
