@@ -11,6 +11,26 @@ library(tidyverse)
 library(data.table)
 library(janitor)
 
+library(sysfonts)
+library(showtext)
+library(cori.charts)
+
+# Loads Lato from the google font repository and adds it to sysfonts
+sysfonts::font_add_google("Lato")
+
+font_add(
+  "TT Hoves",
+  regular = "TypeType - TT Hoves Regular.ttf",
+  bold = "TypeType - TT Hoves Bold.ttf",
+  italic = "TypeType - TT Hoves Italic.ttf",
+  bolditalic = "TypeType - TT Hoves Bold Italic.ttf"
+)
+
+# Ensures that any newly opened graphics devices will use showtext to draw text
+showtext_auto()
+# Sets default density per inch for exports
+showtext_opts(dpi = 300)
+
 library(tidycensus)
 data(fips_codes)
 
@@ -150,7 +170,73 @@ pop_permits_2000_2019 <- dplyr::left_join(
     by = "geoid"
   )
 
-readr::write_csv(permits, here::here("data/permits_per_capita_2000_2019.csv"))
+readr::write_csv(pop_permits_2000_2019, here::here("data/permits_per_capita_2000_2019.csv"))
+
+```
+
+
+```{r}
+
+my_counties <- c(
+  "08067", # Durango, CO
+  "25009", # North shore, MA
+  "06075", # SF, CA
+  "37119", # Charlotte, NC
+  "33003", # Carroll County, NH
+  "33009", # Grafton County, NH
+  "50007", # Burlington, VT
+  "48201", # Houston, TX
+  "25025", # Boston, MA
+  "08013", # Boulder, CO
+  "11001", # Washington, DC
+  "23005" # Portland, ME
+)
+
+viz_dta <- pop_permits_2000_2019 %>%
+  filter(geoid %in% my_counties) %>%
+  select(geoid, name_co, year, units_multi_family_per_1000, units_single_family_per_1000) %>%
+  tidyr::pivot_longer(tidyr::starts_with("units_")) %>%
+  mutate(
+    name = ifelse(name == "units_multi_family_per_1000", "Multi-family units", "Single-family units")
+  )
+
+```
+
+```{r}
+
+# stacked area chart
+fig <- ggplot(viz_dta, aes(x=year, y=value, fill=name)) + 
+  geom_area() +
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0))
+  ) +
+  scale_x_continuous(
+    expand = expansion(mult = c(0, 0))
+  ) +
+  scale_fill_brewer(type = "qual") +
+  cori.charts::theme_cori() +
+  theme(
+    panel.grid.major.y = element_line(color ="#d0d2ce", linewidth = .15, linetype = "solid"),
+    axis.ticks.length.x = unit(7, "pt"),
+    axis.ticks.length.y = unit(7, "pt"),
+    axis.text.x = element_text(margin = margin(t = 2)),
+    axis.text.y = element_text(margin = margin(r = 3)),
+    strip.text = element_text(margin = margin(t = 20, b = 5)),
+    axis.ticks = element_line(color = "#d0d2ce", linewidth = .15),
+    axis.line.x = element_blank(),
+    legend.margin = margin(t = 10),
+    panel.spacing.x = unit(10, "pt")
+  ) +
+  labs(
+    title = "Housing permits per capita (2000-2019)",
+    subtitle = "New privately-owned residential construction permits per 1,000 people",
+    x = NULL,
+    y = NULL,
+    caption = "Source: Building Permits Survey and County Population Totals, 2000-2019"
+  ) +
+  facet_wrap(~name_co, ncol = 3)
+
+save_plot(fig, here::here("export/permits_subset.png"), add_logo = FALSE, chart_height = 8.5)
 
 ```
 
